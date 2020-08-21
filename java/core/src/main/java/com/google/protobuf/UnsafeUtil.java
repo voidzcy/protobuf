@@ -43,6 +43,7 @@ import java.util.logging.Logger;
 final class UnsafeUtil {
   private static final Logger logger = Logger.getLogger(UnsafeUtil.class.getName());
   private static final sun.misc.Unsafe UNSAFE = getUnsafe();
+  private static final jdk.internal.misc.Unsafe INTERNAL_UNSAFE = getInternalUnsafe();
   private static final Class<?> MEMORY_CLASS = Android.getMemoryClass();
   private static final boolean IS_ANDROID_64 = determineAndroidSupportByAddressSize(long.class);
   private static final boolean IS_ANDROID_32 = determineAndroidSupportByAddressSize(int.class);
@@ -251,6 +252,10 @@ final class UnsafeUtil {
     System.arraycopy(src, (int) srcIndex, target, (int) targetIndex, (int) length);
   }
 
+  static byte[] allocateUninitializedArray(int size) {
+    return MEMORY_ACCESSOR.allocateUninitializedArray(size);
+  }
+
   static byte getByte(long address) {
     return MEMORY_ACCESSOR.getByte(address);
   }
@@ -315,6 +320,33 @@ final class UnsafeUtil {
     return unsafe;
   }
 
+  static jdk.internal.misc.Unsafe getInternalUnsafe() {
+    jdk.internal.misc.Unsafe unsafe = null;
+    try {
+      unsafe =
+          AccessController.doPrivileged(
+              new PrivilegedExceptionAction<jdk.internal.misc.Unsafe>() {
+                @Override
+                public jdk.internal.misc.Unsafe run() throws Exception {
+                  Class<jdk.internal.misc.Unsafe> k = jdk.internal.misc.Unsafe.class;
+
+                  for (Field f : k.getDeclaredFields()) {
+                    f.setAccessible(true);
+                    Object x = f.get(null);
+                    if (k.isInstance(x)) {
+                      return k.cast(x);
+                    }
+                  }
+                  return null;
+                }
+              });
+    } catch (Throwable e) {
+      // Catching Throwable here due to the fact that Google AppEngine raises NoClassDefFoundError
+      // for Unsafe.
+    }
+    return unsafe;
+  }
+
   /** Get a {@link MemoryAccessor} appropriate for the platform, or null if not supported. */
   private static MemoryAccessor getMemoryAccessor() {
     if (UNSAFE == null) {
@@ -330,7 +362,7 @@ final class UnsafeUtil {
       }
     }
 
-    return new JvmMemoryAccessor(UNSAFE);
+    return new JvmMemoryAccessor(UNSAFE, INTERNAL_UNSAFE);
   }
 
   /** Indicates whether or not unsafe array operations are supported on this platform. */
@@ -611,12 +643,18 @@ final class UnsafeUtil {
     public abstract void copyMemory(long srcOffset, byte[] target, long targetIndex, long length);
 
     public abstract void copyMemory(byte[] src, long srcIndex, long targetOffset, long length);
+
+    public byte[] allocateUninitializedArray(int size) {
+      throw new UnsupportedOperationException();
+    }
   }
 
   private static final class JvmMemoryAccessor extends MemoryAccessor {
+    private final jdk.internal.misc.Unsafe internalUnsafe;
 
-    JvmMemoryAccessor(sun.misc.Unsafe unsafe) {
+    JvmMemoryAccessor(sun.misc.Unsafe unsafe, jdk.internal.misc.Unsafe internalUnsafe) {
       super(unsafe);
+      this.internalUnsafe = internalUnsafe;
     }
 
     @Override
@@ -697,6 +735,11 @@ final class UnsafeUtil {
     @Override
     public void copyMemory(byte[] src, long srcIndex, long targetOffset, long length) {
       unsafe.copyMemory(src, BYTE_ARRAY_BASE_OFFSET + srcIndex, null, targetOffset, length);
+    }
+
+    @Override
+    public byte[] allocateUninitializedArray(int size) {
+      return (byte[]) internalUnsafe.allocateUninitializedArray(byte.class, size);
     }
 
     @Override

@@ -3477,7 +3477,7 @@ public abstract class CodedInputStream {
           return result;
         } else {
           byte[] bytes;
-          bytes = new byte[size];
+          bytes = UnsafeUtil.allocateUninitializedArray(size);
           UnsafeUtil.copyMemory(currentByteBufferPos, bytes, 0, size);
           currentByteBufferPos += size;
           return ByteString.wrap(bytes);
